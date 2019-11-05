@@ -1,0 +1,48 @@
+stages:
+  - test
+  - evaluate
+
+variables:
+  DOCKER_DRIVER: overlay2
+  PYTHONUNBUFFERED: 1
+
+public-testcases:
+  stage: test
+  image: northaeth/studentdocker:latest
+  before_script:
+    - "echo The project directory is: $CI_PROJECT_DIR"
+    - "mkdir -p $CI_PROJECT_DIR/.test-out/$CI_JOB_NAME"
+    - "find $CI_PROJECT_DIR -type f -iname \"*.sh\" -exec chmod +x {} \\;"
+    - "chmod +x $CI_PROJECT_DIR/compile $CI_PROJECT_DIR/run"
+  script:
+    - "$CI_PROJECT_DIR/compile"
+    - "$CI_PROJECT_DIR/run -i $CI_PROJECT_DIR/inputs/ -o $CI_PROJECT_DIR/.test-out/$CI_JOB_NAME"
+  artifacts:
+    paths:
+      - ".test-out"
+  interruptible: true
+  only:
+    refs:
+      - master
+  except:
+    variables:
+      - $CI_COMMIT_MESSAGE =~ /skip-tests/
+
+
+give-score:
+  stage: evaluate
+  image: netsecethz/iptables-evaluator:latest
+  script:
+    - "pwd"
+    - "ls $CI_PROJECT_DIR/.test-out/"
+    - "evaluator -s $CI_PROJECT_DIR/.test-out/public-testcases -o $CI_PROJECT_DIR/test-results/final_result.json"
+  artifacts:
+    paths:
+      - "test-results"
+  interruptible: true
+  only:
+    refs:
+      - master
+  except:
+    variables:
+      - $CI_COMMIT_MESSAGE =~ /skip-tests/
