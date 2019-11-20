@@ -25,7 +25,9 @@ class FirewallRuleGenerator(object):
         self.__network_desc     = network_desc
         self.__communications   = communications 
         self.__graph            = self.generate_network_graph()
-        self.filter_rules       = self.init_rules()
+        self.filter_rules       = {}
+
+        self.init_rules()
 
     def get_filter_rules(self):
         '''
@@ -68,8 +70,10 @@ class FirewallRuleGenerator(object):
                 address: the network address
                 prefix: the prefix of the network address
             '''
-            graph.add_node("s{0}".format(subnet_id), id=subnet_id,
-                address=subnet['address'], prefix=subnet['prefix']
+            graph.add_node(sId2sName(subnet_id), 
+                id=subnet_id,
+                address=subnet['address'], 
+                prefix=subnet['prefix']
             )
         
         # add edges to graph
@@ -80,12 +84,24 @@ class FirewallRuleGenerator(object):
                 interfaceId: the id of the interface on the router (unique per router)
                 ip: the ip of the interface on the router (unique per router)
             '''
+            router_name  = rId2sName(edge['routerId'])
+            subnet_name  = sId2sName(edge['subnetId'])
+            interface_id = edge['interfaceId']
+            interface_ip = edge['ip']
+
             graph.add_edge(
-                "r{0}".format(edge['routerId']),
-                "s{0}".format(edge['subnetId']),
-                interfaceId=edge['interfaceId'],
-                ip=edge['ip']
+                router_name,
+                subnet_name,
+                routerInterfaceId=interface_id,
+                routerInterfaceIp=interface_ip
             )
+
+            # add the information for the interface connected towards the subnet into the
+            # router node. This makes things easier during rule creation
+            graph.nodes[router_name][subnet_name] = {
+                'interfaceId': interface_ip,
+                'interfaceIp': interface_ip 
+            } 
 
         return graph
 
@@ -97,21 +113,69 @@ class FirewallRuleGenerator(object):
             communication (dict): A dict with the communication parameters
         '''
 
+        src_subnet = sId2sName(communication['sourceSubnetId']) 
+        dst_subnet = sId2sName(communication['targetSubnetId'])
 
-        if communication['direction'] == 'bidirectional':
-            pass
+        path = nx.shortest_path(self.__graph, source=src_subnet, target=dst_subnet)
+
+        # iterate over all hops and add rules to routers
+        for i in range(len(path)):
+            if re.match(r"r\d+", path[i]):
+                # get the last and next hop. These will always be subnets
+                # since router-router links dont exist
+                # routers are never the first or last hop, thus the array access
+                # will never be out of range
+
+                router_name       = path[i]
+                last_hop          = path[i-1]
+                next_hop          = path[i+1]
+
+                src_ip            = self.__graph.nodes[src_subnet]['address']
+                src_prefix        = self.__graph.nodes[src_subnet]['prefix']
+                dst_ip            = self.__graph.nodes[dst_subnet]['address']
+                dst_prefix        = self.__graph.nodes[dst_subnet]['prefix']
+                ingress_interface = self.__graph.nodes[router_name][last_hop]['interfaceId']
+                egress_interface  = self.__graph.nodes[router_name][next_hop]['interfaceId']
+
+                # construct the rule string
+                rule = (
+                    '-A FORWARD '
+                    '-p {p} '
+                    '--sport {sportStart}:{sportEnd} '
+                    '--dport {dportStart}:{dportEnd} '
+                    '-s {srcIp}/{srcPrefix} '
+                    '-d {dstIp}/{dstPrefix} '
+                    '-i {ingressIf} '
+                    '-o {egressIf} '
+                    '-m state ' 
+                    '--state NEW,ESTABLISHED '
+                    '-j ACCEPT '
+                ).format(
+                    p=communication['protocol'],
+                    sportStart=communication['sourcePortStart'],
+                    sportEnd=communication['sourcePortEnd'],
+                    dportStart=communication['targetPortStart'],
+                    dportEnd=communication['targetPortEnd'],
+                    srcIp=src_ip,
+                    srcPrefix=src_prefix,
+                    dstIp=dst_ip,
+                    dstPrefix=dst_prefix,
+                    ingressIf=ingress_interface,
+                    egressIf=egress_interface,
+                )
 
 
     def init_rules(self):
         '''
         Initializes the basic filter rules for each router and writes them into self.filter_rules
         '''
+
         for router in self.__network_desc['routers']:
             self.filter_rules[router['id']] = {
                 '*nat': [
                     ':OUTPUT ACCEPT [0:0]',
                     ':PREROUTING ACCEPT [0:0]',
-                    ':POSTROUTING ACCEPT [0:0]','
+                    ':POSTROUTING ACCEPT [0:0]',
                     'COMMIT'
                 ],
                 '*filter': [
@@ -120,3 +184,23 @@ class FirewallRuleGenerator(object):
                     ':FORWARD DROP [0:0]'
                 ]
             }
+
+def sId2sName(subnet_id):
+    '''
+    Converts a subnet id to the subnet node names in the graphs: 's<id>'
+    Args:
+        subnet_id (int): The subnet id
+    Returns:
+        subnet_name (str): the subent node name
+    '''
+    return "s{0}".format(subnet_id)
+
+def rId2sName(router_id):
+    '''
+    Converts a router id to the router node names in the graphs: 'r<id>'
+    Args:
+        router_id (int): The router id
+    Returns:
+        router_name (str): the router node name
+    '''
+    return "r{0}".format(router_id)

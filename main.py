@@ -45,6 +45,8 @@ def main():
             input_file['network'], input_file['communications']
         )
 
+        fw_rule_generator.get_filter_rules()
+
 
 
 
