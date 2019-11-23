@@ -29,15 +29,6 @@ class FirewallRuleGenerator(object):
 
         self.init_rules()
 
-    def get_filter_rules(self):
-        '''
-        Generates all the filter rules for the provided network_config and
-        the communications specification
-        '''
-
-        for communication in self.__communications:
-            self.generate_filter_rule(communication)
-
     def generate_network_graph(self):
         '''
         Generates the specified network topology as a networkx.Graph object
@@ -105,12 +96,30 @@ class FirewallRuleGenerator(object):
 
         return graph
 
+    def create_filter_rules(self):
+        '''
+        Generates all the filter rules for the provided network_config and
+        the communications specification and stores them in self.filter_rules
+        '''
+
+        for communication in self.__communications:
+            communication_filter_rules = self.generate_filter_rule(communication)
+
+            # iterate over all generate rules for the current communications object
+            # and append the rules to each router's '*filter' rules array in self.filter_rules
+            for router_name, rules_array in communication_filter_rules.items():
+                self.filter_rules[router_name]['*filter'] += rules_array
+
     def generate_filter_rule(self, communication):
         '''
-        Generates the filter rules for the given communication object
+        Generates the filter rules for all routers on the communication path
+        for the given communication object
         
         Args:
             communication (dict): A dict with the communication parameters
+
+        Returns:
+            filters_rules (dict): A dict with router names as keys and array with filter rules as values
         '''
 
         src_subnet = sId2sName(communication['sourceSubnetId']) 
@@ -119,17 +128,28 @@ class FirewallRuleGenerator(object):
         path = nx.shortest_path(self.__graph, source=src_subnet, target=dst_subnet)
 
         # iterate over all hops and add rules to routers
+        filter_rules = {}
         for i in range(len(path)):
+            # check if the hop is a router (we only add rules for routers)
             if re.match(r"r\d+", path[i]):
-                # get the last and next hop. These will always be subnets
-                # since router-router links dont exist
-                # routers are never the first or last hop, thus the array access
-                # will never be out of range
+                '''
+                get the last and next hop. These will always be subnets
+                since router-router links dont exist
+                routers are never the first or last hop, thus the array access
+                will never be out of range
+                '''
 
-                router_name       = path[i]
+                router_name                 = path[i]
+                filter_rules[router_name]   = []
+
                 last_hop          = path[i-1]
                 next_hop          = path[i+1]
 
+                protocol          = communication['protocol']
+                sport_start       = communication['sourcePortStart']
+                sport_end         = communication['sourcePortEnd']
+                dport_start       = communication['targetPortStart']
+                dport_end         = communication['targetPortEnd']
                 src_ip            = self.__graph.nodes[src_subnet]['address']
                 src_prefix        = self.__graph.nodes[src_subnet]['prefix']
                 dst_ip            = self.__graph.nodes[dst_subnet]['address']
@@ -137,33 +157,76 @@ class FirewallRuleGenerator(object):
                 ingress_interface = self.__graph.nodes[router_name][last_hop]['interfaceId']
                 egress_interface  = self.__graph.nodes[router_name][next_hop]['interfaceId']
 
-                # construct the rule string
-                rule = (
-                    '-A FORWARD '
-                    '-p {p} '
-                    '--sport {sportStart}:{sportEnd} '
-                    '--dport {dportStart}:{dportEnd} '
-                    '-s {srcIp}/{srcPrefix} '
-                    '-d {dstIp}/{dstPrefix} '
-                    '-i {ingressIf} '
-                    '-o {egressIf} '
-                    '-m state ' 
-                    '--state NEW,ESTABLISHED '
-                    '-j ACCEPT '
-                ).format(
-                    p=communication['protocol'],
-                    sportStart=communication['sourcePortStart'],
-                    sportEnd=communication['sourcePortEnd'],
-                    dportStart=communication['targetPortStart'],
-                    dportEnd=communication['targetPortEnd'],
-                    srcIp=src_ip,
-                    srcPrefix=src_prefix,
-                    dstIp=dst_ip,
-                    dstPrefix=dst_prefix,
-                    ingressIf=ingress_interface,
-                    egressIf=egress_interface,
+                rule = self.generate_rule_string(
+                    protocol, sport_start, sport_end, dport_start, dport_end,
+                    src_ip, src_prefix, dst_ip, dst_prefix, ingress_interface, egress_interface, 'NEW, ESTABLISHED'
                 )
+                filter_rules[router_name].append(rule)
 
+                # if the communication is bidirectional, we add a rule with ports, IPs and
+                # interfaces switched to allow the reverse communication 
+                if communication['direction'] == 'bidirectional':
+                    reverse_rule = self.generate_rule_string(
+                        protocol, dport_start, dport_end, sport_start, sport_end,
+                        dst_ip, dst_prefix, src_ip, src_prefix, egress_interface, ingress_interface, 'ESTABLISHED'
+                    )
+                    filter_rules[router_name].append(reverse_rule)
+
+        return filter_rules
+
+    def generate_rule_string(
+        self, protocol, sport_start, sport_end, dport_start, dport_end,
+        src_ip, src_prefix, dst_ip, dst_prefix, ingress_interface, egress_interface, state 
+    ):
+        '''
+        Generates the iptables rule string
+
+        Args:
+            protocol (str):             The L4 protocol (UDP, TCP)
+            sport_start (int):          The lower bound of the --sport port range
+            sport_end (int):            The upper bound of the --sport port range
+            dport_start (int):          The lower bound of the --dport port range
+            dport_end (int):            The upper bound of the --dport port range
+            src_ip (str):               The IP of the src subnet
+            src_prefix (int):           The prefix of the IP range of the src subnet
+            dst_ip (str):               The IP of the dst subnet
+            dst_prefix (int):           The prefix of the IP range of the dst subnet
+            ingress_interface (str):    The interface where the traffic enters
+            egress_interface (str):     The interface where the traffic leaves
+            state (str):                The state to match (NEW, ESTABLISHED for forward rule, 
+                                        ESTABLISHED for reverse rule)
+        Returns:
+            rule (str):                 The iptables rule string
+        '''
+
+        rule = (
+            '-A FORWARD '
+            '-p {p} '
+            '--sport {sportStart}:{sportEnd} '
+            '--dport {dportStart}:{dportEnd} '
+            '-s {srcIp}/{srcPrefix} '
+            '-d {dstIp}/{dstPrefix} '
+            '-i {ingressIf} '
+            '-o {egressIf} '
+            '-m state ' 
+            '--state {state} '
+            '-j ACCEPT '
+        ).format(
+            p=protocol,
+            sportStart=sport_start,
+            sportEnd=sport_end,
+            dportStart=dport_start,
+            dportEnd=dport_end,
+            srcIp=src_ip,
+            srcPrefix=src_prefix,
+            dstIp=dst_ip,
+            dstPrefix=dst_prefix,
+            ingressIf=ingress_interface,
+            egressIf=egress_interface,
+            state=state
+        )
+
+        return rule
 
     def init_rules(self):
         '''
@@ -171,12 +234,12 @@ class FirewallRuleGenerator(object):
         '''
 
         for router in self.__network_desc['routers']:
-            self.filter_rules[router['id']] = {
+            router_name = "r{0}".format(router['id'])
+            self.filter_rules[router_name] = {
                 '*nat': [
                     ':OUTPUT ACCEPT [0:0]',
                     ':PREROUTING ACCEPT [0:0]',
                     ':POSTROUTING ACCEPT [0:0]',
-                    'COMMIT'
                 ],
                 '*filter': [
                     ':INPUT DROP [0:0]',
@@ -184,6 +247,43 @@ class FirewallRuleGenerator(object):
                     ':FORWARD DROP [0:0]'
                 ]
             }
+
+    def write_filter_rules(self, output_dir, testcase_id):
+        '''
+        Writes all the rules in self.filter_rules to files in output_dir, follwing the
+        iptables restore file format. Each router gets its own file.
+        The content of the output_dir directory follows the pattern :testcaseId/:routerId
+
+        Args:
+            output_dir (str):   Path to the directory where output files are written to
+            testcase_id (int):  The id of the testcase
+        '''
+
+        for router_name, table_dict in self.filter_rules.items():
+            # extract router_id
+            match = re.match(r"r(\d+)", router_name)
+            if not match:
+                raise ValueError("Invalid router name: {0}".format(router_name))
+            router_id = match.group(1)
+
+            # the output filename follows the pattern :output_dir/:testcaseId/:routerId
+            output_file_name = "{0}/{1}/{2}".format(output_dir, testcase_id, router_id)
+            if os.path.exists(output_file_name):
+                os.remove(output_file_name)
+
+            # the file handle to write the rules
+            output_file = open(output_file_name, 'x')
+
+            for table_name, rules_array in table_dict.items():
+                output_file.write(table_name + "\n")
+
+                # iterate over rules
+                for rule in rules_array:
+                    output_file.write(rule + "\n")
+
+                output_file.write('COMMIT\n\n')
+
+            output_file.close()
 
 def sId2sName(subnet_id):
     '''
