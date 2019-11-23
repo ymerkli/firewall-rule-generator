@@ -1,3 +1,28 @@
 #!/bin/bash
 
-echo "Run your project here."
+# iterate over command line flags and arguments
+while [[ $# -gt 0 ]]
+do
+key="$1"
+case $key in
+    -i)
+    INPUT_DIR="-i $2"
+    shift # past argument
+    shift # past value
+    ;;
+    -o)
+    OUTPUT_DIR="-o $2"
+    shift # past argument
+    shift # past value
+    ;;
+    *)
+
+    ;;
+esac
+done
+
+# add required, fixed length CLI arguments to command
+CMD="python3 main.py $INPUT_DIR $OUTPUT_DIR"
+
+# execute python script
+$CMD
