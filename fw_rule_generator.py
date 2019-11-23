@@ -208,32 +208,55 @@ class FirewallRuleGenerator(object):
             rule (str):                 The iptables rule string
         '''
 
-        rule = (
-            '-A FORWARD '
-            '-p {p} '
-            '--sport {sportStart}:{sportEnd} '
-            '--dport {dportStart}:{dportEnd} '
-            '-s {srcIp}/{srcPrefix} '
-            '-d {dstIp}/{dstPrefix} '
-            '-i {ingressIf} '
-            '-o {egressIf} '
-            '-m state ' 
-            '--state {state} '
-            '-j ACCEPT '
-        ).format(
-            p=protocol,
-            sportStart=sport_start,
-            sportEnd=sport_end,
-            dportStart=dport_start,
-            dportEnd=dport_end,
-            srcIp=src_ip,
-            srcPrefix=src_prefix,
-            dstIp=dst_ip,
-            dstPrefix=dst_prefix,
-            ingressIf=ingress_interface,
-            egressIf=egress_interface,
-            state=state
-        )
+        # check for ICMP, since ICMP doesnt have ports
+        if protocol == 'icmp':
+            rule = (
+                '-A FORWARD '
+                '-p {p} '
+                '-s {srcIp}/{srcPrefix} '
+                '-d {dstIp}/{dstPrefix} '
+                '-i {ingressIf} '
+                '-o {egressIf} '
+                '-m state ' 
+                '--state {state} '
+                '-j ACCEPT '
+            ).format(
+                p=protocol,
+                srcIp=src_ip,
+                srcPrefix=src_prefix,
+                dstIp=dst_ip,
+                dstPrefix=dst_prefix,
+                ingressIf=ingress_interface,
+                egressIf=egress_interface,
+                state=state
+            )
+        else:
+            rule = (
+                '-A FORWARD '
+                '-p {p} '
+                '--sport {sportStart}:{sportEnd} '
+                '--dport {dportStart}:{dportEnd} '
+                '-s {srcIp}/{srcPrefix} '
+                '-d {dstIp}/{dstPrefix} '
+                '-i {ingressIf} '
+                '-o {egressIf} '
+                '-m state ' 
+                '--state {state} '
+                '-j ACCEPT '
+            ).format(
+                p=protocol,
+                sportStart=sport_start,
+                sportEnd=sport_end,
+                dportStart=dport_start,
+                dportEnd=dport_end,
+                srcIp=src_ip,
+                srcPrefix=src_prefix,
+                dstIp=dst_ip,
+                dstPrefix=dst_prefix,
+                ingressIf=ingress_interface,
+                egressIf=egress_interface,
+                state=state
+            )
 
         return rule
 
