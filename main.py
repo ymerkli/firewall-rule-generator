@@ -45,6 +45,7 @@ def main():
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
+    # iterate over testcase files in input_dir
     for filename in os.listdir(input_dir):
         # check if the filename matches the ':id.json' naming
         match = re.match(r"(\d+)\.json", filename)
@@ -66,8 +67,10 @@ def main():
                 input_file['network'], input_file['communications']
             )
 
+            # generate all rules for current testcase
             fw_rule_generator.create_filter_rules()
-        
+
+            # write all rules to path 'output_dir/testcase_id'
             fw_rule_generator.write_filter_rules(output_dir, testcase_id)
 
 if __name__ == "__main__":
