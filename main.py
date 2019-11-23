@@ -35,20 +35,29 @@ def main():
     # get the CLI arguments
     input_dir, output_dir = parser()
 
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
     for filename in os.listdir(input_dir):
         # check if the filename matches the ':id.json' naming
-        if re.match(r"\d+\.json", filename):
+        match = re.match(r"(\d+)\.json", filename)
+        if match:
+            testcase_id = match.group(1)
+
+            # create testcase_id output folder if not already existing
+            if not os.path.exists("{0}/{1}".format(output_dir, testcase_id)):
+                os.mkdir("{0}/{1}".format(output_dir, testcase_id))
+
             with open(os.path.join(input_dir, filename), 'r') as json_file:
                 input_file = json.load(json_file)
             
-        fw_rule_generator = FirewallRuleGenerator(
-            input_file['network'], input_file['communications']
-        )
+            fw_rule_generator = FirewallRuleGenerator(
+                input_file['network'], input_file['communications']
+            )
 
-        fw_rule_generator.get_filter_rules()
-
-
-
+            fw_rule_generator.create_filter_rules()
+        
+            fw_rule_generator.write_filter_rules(output_dir, testcase_id)
 
 if __name__ == "__main__":
     main()
