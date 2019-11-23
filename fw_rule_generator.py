@@ -13,7 +13,7 @@ class FirewallRuleGenerator(object):
     the provided network dict
 
     Attributes:
-        network_config (dict):  A dict describing the network
+        network_desc (dict):    A dict describing the network
         communications (array): An array with all the allowed communications
         graph (nx.graph()):     A nx.Graph object representing the network topology
         filter_rules (dict):    A dict with the filter rules to return. Keys are router_ids, values are
@@ -32,6 +32,9 @@ class FirewallRuleGenerator(object):
     def generate_network_graph(self):
         '''
         Generates the specified network topology as a networkx.Graph object
+
+        Returns:
+            graph (nx.Graph): The topology as a nx.Graph object
         '''
 
         # the nx graph object representing the network topology
@@ -47,7 +50,7 @@ class FirewallRuleGenerator(object):
             router node attributes: 
                 router_id
             '''
-            graph.add_node("r{0}".format(router_id), id=router_id)
+            graph.add_node(rId2rName(router_id), id=router_id)
 
         # add subnets nodes to graph
         for subnet in self.__network_desc['subnets']:
@@ -103,17 +106,16 @@ class FirewallRuleGenerator(object):
         '''
 
         for communication in self.__communications:
-            communication_filter_rules = self.generate_filter_rule(communication)
+            communication_filter_rules = self.generate_communication_rule(communication)
 
             # iterate over all generate rules for the current communications object
             # and append the rules to each router's '*filter' rules array in self.filter_rules
             for router_name, rules_array in communication_filter_rules.items():
                 self.filter_rules[router_name]['* filter'] += rules_array
 
-    def generate_filter_rule(self, communication):
+    def generate_communication_rule(self, communication):
         '''
-        Generates the filter rules for all routers on the communication path
-        for the given communication object
+        Generates the filter rules for all routers on the communication path for the given communication object
         
         Args:
             communication (dict): A dict with the communication parameters
@@ -125,6 +127,7 @@ class FirewallRuleGenerator(object):
         src_subnet = sId2sName(communication['sourceSubnetId']) 
         dst_subnet = sId2sName(communication['targetSubnetId'])
 
+        # calculate the shortest path (= only path due to tree network topology)
         path = nx.shortest_path(self.__graph, source=src_subnet, target=dst_subnet)
 
         # iterate over all hops and add rules to routers
@@ -133,10 +136,8 @@ class FirewallRuleGenerator(object):
             # check if the hop is a router (we only add rules for routers)
             if re.match(r"r\d+", path[i]):
                 '''
-                get the last and next hop. These will always be subnets
-                since router-router links dont exist
-                routers are never the first or last hop, thus the array access
-                will never be out of range
+                Get the last and next hop. These will always be subnets since router-router links dont exist
+                Routers are never the first or last hop, thus the array access will never be out of range
                 '''
 
                 router_name                 = path[i]
@@ -157,6 +158,7 @@ class FirewallRuleGenerator(object):
                 ingress_interface = self.__graph.nodes[router_name][last_hop]['interfaceId']
                 egress_interface  = self.__graph.nodes[router_name][next_hop]['interfaceId']
 
+                # generate the forward direction rule
                 rule = self.generate_rule_string(
                     protocol, sport_start, sport_end, dport_start, dport_end,
                     src_ip, src_prefix, dst_ip, dst_prefix, ingress_interface, egress_interface, 'NEW,ESTABLISHED'
@@ -209,6 +211,7 @@ class FirewallRuleGenerator(object):
         '''
 
         # check for ICMP, since ICMP doesnt have ports
+        rule = None
         if protocol == 'icmp':
             rule = (
                 '-A FORWARD '
@@ -262,7 +265,8 @@ class FirewallRuleGenerator(object):
 
     def init_rules(self):
         '''
-        Initializes the basic filter rules for each router and writes them into self.filter_rules
+        Initializes the basic filter rules setup for each router and writes them into self.filter_rules:
+        Do not perform NAT and drop traffic by default
         '''
 
         for router in self.__network_desc['routers']:
