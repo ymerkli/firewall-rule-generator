@@ -68,17 +68,17 @@ class FirewallRuleGenerator(object):
             )
         
         # add edges to graph
-        for edge in self.__network_desc['links']:
+        for link in self.__network_desc['links']:
             '''
-            add edge from router to subnet
+            add link from router to subnet
             edge attributes: 
                 interfaceId: the id of the interface on the router (unique per router)
                 ip: the ip of the interface on the router (unique per router)
             '''
-            router_name  = rId2sName(edge['routerId'])
-            subnet_name  = sId2sName(edge['subnetId'])
-            interface_id = edge['interfaceId']
-            interface_ip = edge['ip']
+            router_name  = rId2rName(link['routerId'])
+            subnet_name  = sId2sName(link['subnetId'])
+            interface_id = link['interfaceId']
+            interface_ip = link['ip']
 
             graph.add_edge(
                 router_name,
@@ -90,7 +90,7 @@ class FirewallRuleGenerator(object):
             # add the information for the interface connected towards the subnet into the
             # router node. This makes things easier during rule creation
             graph.nodes[router_name][subnet_name] = {
-                'interfaceId': interface_ip,
+                'interfaceId': interface_id,
                 'interfaceIp': interface_ip 
             } 
 
@@ -108,7 +108,7 @@ class FirewallRuleGenerator(object):
             # iterate over all generate rules for the current communications object
             # and append the rules to each router's '*filter' rules array in self.filter_rules
             for router_name, rules_array in communication_filter_rules.items():
-                self.filter_rules[router_name]['*filter'] += rules_array
+                self.filter_rules[router_name]['* filter'] += rules_array
 
     def generate_filter_rule(self, communication):
         '''
@@ -159,16 +159,25 @@ class FirewallRuleGenerator(object):
 
                 rule = self.generate_rule_string(
                     protocol, sport_start, sport_end, dport_start, dport_end,
-                    src_ip, src_prefix, dst_ip, dst_prefix, ingress_interface, egress_interface, 'NEW, ESTABLISHED'
+                    src_ip, src_prefix, dst_ip, dst_prefix, ingress_interface, egress_interface, 'NEW,ESTABLISHED'
                 )
                 filter_rules[router_name].append(rule)
 
                 # if the communication is bidirectional, we add a rule with ports, IPs and
                 # interfaces switched to allow the reverse communication 
                 if communication['direction'] == 'bidirectional':
+                    '''
+                    In case of TCP and UDP, the bidirectional flag allows the target to send replies 
+                    but not establish a new connection. the case of ICMP, both source and target are allowed 
+                    to send packets irrespective of the connection state
+                    '''
+                    state = 'ESTABLISHED'
+                    if protocol == 'icmp':
+                        state = 'NEW,ESTABLISHED'
+
                     reverse_rule = self.generate_rule_string(
                         protocol, dport_start, dport_end, sport_start, sport_end,
-                        dst_ip, dst_prefix, src_ip, src_prefix, egress_interface, ingress_interface, 'ESTABLISHED'
+                        dst_ip, dst_prefix, src_ip, src_prefix, egress_interface, ingress_interface, state 
                     )
                     filter_rules[router_name].append(reverse_rule)
 
@@ -236,12 +245,12 @@ class FirewallRuleGenerator(object):
         for router in self.__network_desc['routers']:
             router_name = "r{0}".format(router['id'])
             self.filter_rules[router_name] = {
-                '*nat': [
+                '* nat': [
                     ':OUTPUT ACCEPT [0:0]',
                     ':PREROUTING ACCEPT [0:0]',
                     ':POSTROUTING ACCEPT [0:0]',
                 ],
-                '*filter': [
+                '* filter': [
                     ':INPUT DROP [0:0]',
                     ':OUTPUT DROP [0:0]',
                     ':FORWARD DROP [0:0]'
@@ -281,7 +290,7 @@ class FirewallRuleGenerator(object):
                 for rule in rules_array:
                     output_file.write(rule + "\n")
 
-                output_file.write('COMMIT\n\n')
+                output_file.write('\nCOMMIT\n\n')
 
             output_file.close()
 
@@ -295,7 +304,7 @@ def sId2sName(subnet_id):
     '''
     return "s{0}".format(subnet_id)
 
-def rId2sName(router_id):
+def rId2rName(router_id):
     '''
     Converts a router id to the router node names in the graphs: 'r<id>'
     Args:
